@@ -1,6 +1,6 @@
 ### rearden-backup
 
-**rearden-backup** is a lightweight and reliable Bash script that automates the backup of local directories and securely
+Lightweight and reliable Bash script that automates the backup of local directories and securely
 uploads them to a remote storage service.
 
 Tool combines the power of `rsync` for fast, incremental local backups with `rclone` for seamless remote syncing across
@@ -21,6 +21,18 @@ cloud providers, SFTP, WebDAV, or even custom remote endpoints.
 - Offsite backups for servers or VPS
 - Archiving dev environments, config files, or databases
 
+#### Installation
+
+1. Check out rearden-backup into any path (here is `${HOME}/.rearden-backup`)
+
+   ```bash
+   $ git clone git@github.com:universal-development/rearden-backup.git ~/.rearden-backup
+   ```
+
+2. Add `~/.rearden-backup/bin` to your `$PATH` any way you like
+
+   ```bash
+   $ echo 'export PATH="$HOME/.rearden-backup/bin:$PATH"' >> ~/.bash_profile
 
 #### Commands
 
