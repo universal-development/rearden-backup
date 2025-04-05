@@ -68,9 +68,12 @@ print_config() {
 EOF
 }
 
-initialize_repo() {
-    if ! restic -r "$LOCAL_BACKUP_REPO/restic" snapshots &>/dev/null; then
-        echo -e "$INFO Initializing restic repository at $LOCAL_BACKUP_REPO/restic"
+restic_init() {
+    echo -e "$INFO Checking if Restic repository is initialized..."
+    if restic -r "$LOCAL_BACKUP_REPO/restic" snapshots &>/dev/null; then
+        echo -e "$INFO Restic repository already initialized."
+    else
+        echo -e "$INFO Initializing Restic repository at $LOCAL_BACKUP_REPO/restic"
         restic -r "$LOCAL_BACKUP_REPO/restic" init
     fi
 }
@@ -78,7 +81,6 @@ initialize_repo() {
 backup() {
     if [[ "$ENABLE_BACKUP" -eq 1 ]]; then
         echo -e "$INFO Starting backup..."
-        initialize_repo
         restic -r "$LOCAL_BACKUP_REPO/restic" backup $BACKUP_DIRECTORIES \
             --exclude '**/mount/**' --exclude '**/.cache/restic/**'
         echo -e "$INFO Backup completed."
@@ -125,13 +127,14 @@ main() {
     print_config
 
     case "${1:-}" in
+        init) restic_init ;;
         backup) backup ;;
         restore) restore ;;
         push) push ;;
         pull) pull ;;
         *)
             echo -e "$ERROR Invalid command."
-            echo "Usage: $0 {backup|restore|push|pull}"
+            echo "Usage: $0 {init|backup|restore|push|pull}"
             exit 1
             ;;
     esac
