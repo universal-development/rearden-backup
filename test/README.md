@@ -2,4 +2,9 @@
 
 Test backup directory
 
-export CONFIG_DIR=$(pwd)
+```
+../bin/rbackup init
+../bin/rbackup backup
+mv project project-old
+../bin/rbackup restore
+```
