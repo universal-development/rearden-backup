@@ -1,4 +1,4 @@
-# test
+# Test script
 
 Test backup directory
 
