@@ -10,6 +10,7 @@
 # - Lock mechanism to prevent concurrent runs
 # - Comprehensive logging
 # - Support for configuration profiles
+# - Push/Pull of entire CONFIG_DIR, not just restic repo
 
 set -euo pipefail
 
@@ -251,7 +252,7 @@ validate_config() {
 set_defaults() {
     # All paths are derived from CONFIG_DIR now
     LOCAL_BACKUP_REPO="${LOCAL_BACKUP_REPO:-${BACKUP_DIR}/${PROFILE}}"
-    RCLONE_REMOTE="${RCLONE_REMOTE:-remote:backup/${PROFILE}}"
+    RCLONE_REMOTE="${RCLONE_REMOTE:-remote:backup}"
 
     # Create local backup repo if it doesn't exist
     if [[ ! -d "$LOCAL_BACKUP_REPO/restic" ]]; then
@@ -420,7 +421,7 @@ restore() {
 
 push() {
     if [[ "$ENABLE_PUSH" -eq 1 ]]; then
-        log "Uploading backup to remote: $RCLONE_REMOTE"
+        log "Uploading entire CONFIG_DIR to remote: $RCLONE_REMOTE"
 
         local cmd="rclone sync"
 
@@ -430,7 +431,8 @@ push() {
             cmd+=" -P"  # Progress but not verbose
         fi
 
-        cmd+=" \"$LOCAL_BACKUP_REPO\" \"$RCLONE_REMOTE\""
+        # Sync the entire CONFIG_DIR instead of just the backup repo
+        cmd+=" \"$CONFIG_DIR\" \"$RCLONE_REMOTE/${PROFILE}\""
 
         if [[ "$DRY_RUN" -eq 1 ]]; then
             cmd+=" --dry-run"
@@ -441,7 +443,7 @@ push() {
         eval "$cmd"
 
         if [[ "$?" -eq 0 && "$DRY_RUN" -ne 1 ]]; then
-            log_success "Upload to remote completed successfully."
+            log_success "Upload of CONFIG_DIR to remote completed successfully."
         elif [[ "$DRY_RUN" -ne 1 ]]; then
             log_error "Upload to remote failed!"
             return 1
@@ -453,7 +455,7 @@ push() {
 
 pull() {
     if [[ "$ENABLE_PULL" -eq 1 ]]; then
-        log "Downloading backup from remote: $RCLONE_REMOTE"
+        log "Downloading entire CONFIG_DIR from remote: $RCLONE_REMOTE"
 
         local cmd="rclone sync"
 
@@ -463,7 +465,8 @@ pull() {
             cmd+=" -P"  # Progress but not verbose
         fi
 
-        cmd+=" \"$RCLONE_REMOTE\" \"$LOCAL_BACKUP_REPO\""
+        # Sync from the remote to the entire CONFIG_DIR
+        cmd+=" \"$RCLONE_REMOTE/${PROFILE}\" \"$CONFIG_DIR\""
 
         if [[ "$DRY_RUN" -eq 1 ]]; then
             cmd+=" --dry-run"
@@ -474,7 +477,7 @@ pull() {
         eval "$cmd"
 
         if [[ "$?" -eq 0 && "$DRY_RUN" -ne 1 ]]; then
-            log_success "Download from remote completed successfully."
+            log_success "Download of CONFIG_DIR from remote completed successfully."
         elif [[ "$DRY_RUN" -ne 1 ]]; then
             log_error "Download from remote failed!"
             return 1
@@ -564,8 +567,8 @@ Commands:
   backup         Create a new backup
   restore [path] [snapshot]
                  Restore from backup (defaults to latest snapshot and / path)
-  push           Upload backup to remote storage
-  pull           Download backup from remote storage
+  push           Upload entire CONFIG_DIR to remote storage
+  pull           Download entire CONFIG_DIR from remote storage
   list           List available snapshots
   stats          Show backup statistics
   verify         Verify the integrity of the backup repository
