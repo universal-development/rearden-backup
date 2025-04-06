@@ -96,6 +96,15 @@ user = abc
 port = 22
 ```
 
+Example `local/rclone.conf` file for Hetzner storage box:
+```
+[remote]
+type = sftp
+host = xyz.your-storagebox.de
+user = abc
+port = 23
+```
+
 ## License
 
 This code is released under the MIT License. See [LICENSE](LICENSE).
