@@ -85,6 +85,16 @@ cloud providers, SFTP, WebDAV, or even custom remote endpoints.
 
 *Either `RESTIC_PASSWORD` or `RESTIC_PASSWORD_FILE` must be set
 
+## Example files
+
+Example `init.sh`
+
+```
+export CONFIG_DIR=$(pwd)/local
+export BACKUP_DIRECTORIES=/projects
+export RESTIC_PASSWORD_FILE=$(pwd)/creds.txt
+export RCLONE_REMOTE="remote:backup/projects-$(hostname)"
+```
 
 Example `local/rclone.conf` file for sftp uploads:
 
