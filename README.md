@@ -26,13 +26,13 @@ cloud providers, SFTP, WebDAV, or even custom remote endpoints.
 1. Check out rearden-backup into any path (here is `${HOME}/.rearden-backup`)
 
    ```bash
-   $ git clone git@github.com:universal-development/rearden-backup.git ~/.rearden-backup
+   git clone git@github.com:universal-development/rearden-backup.git ~/.rearden-backup
    ```
 
 2. Add `~/.rearden-backup/bin` to your `$PATH` any way you like
 
    ```bash
-   $ echo 'export PATH="$HOME/.rearden-backup/bin:$PATH"' >> ~/.bash_profile
+   echo 'export PATH="$HOME/.rearden-backup/bin:$PATH"' >> ~/.bash_profile
 
 #### Commands
 
@@ -84,6 +84,17 @@ cloud providers, SFTP, WebDAV, or even custom remote endpoints.
 | `ENABLE_PULL`          | Enable/disable pull functionality                | No (default: 1)  |
 
 *Either `RESTIC_PASSWORD` or `RESTIC_PASSWORD_FILE` must be set
+
+
+Example `local/rclone.conf` file for sftp uploads:
+
+```
+[remote]
+type = sftp
+host = xyz
+user = abc
+port = 22
+```
 
 ## License
 
