@@ -431,7 +431,12 @@ push() {
             cmd+=" -P"  # Progress but not verbose
         fi
 
-        # Sync the entire CONFIG_DIR instead of just the backup repo
+        # Exclude the current log file to avoid syncing issues
+        local log_file_basename
+        log_file_basename=$(basename "$LOG_FILE")
+        cmd+=" --exclude logs/$log_file_basename"
+
+        # Sync the entire CONFIG_DIR except the current log
         cmd+=" \"$CONFIG_DIR\" \"$RCLONE_REMOTE/${PROFILE}\""
 
         if [[ "$DRY_RUN" -eq 1 ]]; then
