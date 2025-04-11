@@ -11,6 +11,7 @@
 # - Comprehensive logging
 # - Support for configuration profiles
 # - Push/Pull of entire CONFIG_DIR, not just restic repo
+# - Support for predefined remote RESTIC_REPOSITORY
 
 set -euo pipefail
 
@@ -81,6 +82,8 @@ ENABLE_RESTORE="1"
 ENABLE_PUSH="1"
 ENABLE_PULL="1"
 VERBOSE="${VERBOSE:-0}"
+RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-}"
+USE_REMOTE_REPO="0"
 
 # Handle script exit
 cleanup() {
@@ -236,6 +239,23 @@ validate_config() {
         log_warn "Rclone config not found at $RCLONE_CONFIG. Remote operations may fail."
     fi
 
+    # Check RESTIC_REPOSITORY configuration
+    if [[ -n "$RESTIC_REPOSITORY" ]]; then
+        USE_REMOTE_REPO="1"
+        log "Using direct remote repository: $RESTIC_REPOSITORY"
+
+        # Check if additional environment variables are needed for the repository type
+        if [[ "$RESTIC_REPOSITORY" == *"s3:"* && -z "${AWS_ACCESS_KEY_ID:-}" ]]; then
+            log_warn "S3 repository detected but AWS_ACCESS_KEY_ID is not set"
+        elif [[ "$RESTIC_REPOSITORY" == *"sftp:"* && -z "${RESTIC_SFTP_COMMAND:-}" ]]; then
+            log_warn "SFTP repository detected but RESTIC_SFTP_COMMAND might be needed"
+        elif [[ "$RESTIC_REPOSITORY" == *"rest:"* && -z "${RESTIC_REST_USERNAME:-}" ]]; then
+            log_warn "REST repository detected but RESTIC_REST_USERNAME might be needed"
+        fi
+    else
+        USE_REMOTE_REPO="0"
+    fi
+
     # Validate restic environment variables
     if [[ -z "${RESTIC_PASSWORD:-}" && -z "${RESTIC_PASSWORD_FILE:-}" ]]; then
         # Try to find a password file in the config directory
@@ -254,8 +274,8 @@ set_defaults() {
     LOCAL_BACKUP_REPO="${LOCAL_BACKUP_REPO:-${BACKUP_DIR}/${PROFILE}}"
     RCLONE_REMOTE="${RCLONE_REMOTE:-remote:backup}"
 
-    # Create local backup repo if it doesn't exist
-    if [[ ! -d "$LOCAL_BACKUP_REPO/restic" ]]; then
+    # Create local backup repo if it doesn't exist and we're not using a remote repo
+    if [[ "$USE_REMOTE_REPO" -eq 0 && ! -d "$LOCAL_BACKUP_REPO/restic" ]]; then
         mkdir -p "$LOCAL_BACKUP_REPO/restic"
         log "Created local backup repository: $LOCAL_BACKUP_REPO/restic"
     fi
@@ -264,6 +284,16 @@ set_defaults() {
     ENABLE_RESTORE="${ENABLE_RESTORE:-1}"
     ENABLE_PUSH="${ENABLE_PUSH:-1}"
     ENABLE_PULL="${ENABLE_PULL:-1}"
+
+    # Disable push/pull if using a remote repository directly
+    if [[ "$USE_REMOTE_REPO" -eq 1 ]]; then
+        # Only warn if they were explicitly enabled
+        if [[ "$ENABLE_PUSH" -eq 1 || "$ENABLE_PULL" -eq 1 ]]; then
+            log_warn "Push/Pull operations are disabled when using a direct remote repository."
+        fi
+        ENABLE_PUSH=0
+        ENABLE_PULL=0
+    fi
 }
 
 print_config() {
@@ -271,8 +301,22 @@ print_config() {
     cat <<EOF
   CONFIG_DIR:         $CONFIG_DIR
   PROFILE:            $PROFILE
+EOF
+
+    if [[ "$USE_REMOTE_REPO" -eq 1 ]]; then
+        cat <<EOF
+  RESTIC_REPOSITORY:  $RESTIC_REPOSITORY
+  USE_REMOTE_REPO:    Yes
+EOF
+    else
+        cat <<EOF
   LOCAL_BACKUP_REPO:  $LOCAL_BACKUP_REPO
   RCLONE_REMOTE:      $RCLONE_REMOTE
+  USE_REMOTE_REPO:    No
+EOF
+    fi
+
+    cat <<EOF
   BACKUP_DIRECTORIES: $BACKUP_DIRECTORIES
   DRY_RUN:            $DRY_RUN
   RETENTION_DAYS:     $RETENTION_DAYS
@@ -288,16 +332,27 @@ print_config() {
 EOF
 }
 
+# Helper function to get the repository path for restic commands
+get_repo_path() {
+    if [[ "$USE_REMOTE_REPO" -eq 1 ]]; then
+        echo "$RESTIC_REPOSITORY"
+    else
+        echo "$LOCAL_BACKUP_REPO/restic"
+    fi
+}
+
 restic_init() {
-    log "Checking if Restic repository is initialized..."
-    if restic -r "$LOCAL_BACKUP_REPO/restic" snapshots &>/dev/null; then
+    local repo_path=$(get_repo_path)
+    log "Checking if Restic repository is initialized at $repo_path..."
+
+    if restic snapshots &>/dev/null; then
         log "Restic repository already initialized."
     else
-        log "Initializing Restic repository at $LOCAL_BACKUP_REPO/restic"
+        log "Initializing Restic repository at $repo_path"
         if [[ "$DRY_RUN" -eq 1 ]]; then
             log "DRY-RUN: Would initialize repository"
         else
-            restic -r "$LOCAL_BACKUP_REPO/restic" init
+            restic init
             log_success "Repository initialized successfully."
         fi
     fi
@@ -305,7 +360,8 @@ restic_init() {
 
 backup() {
     if [[ "$ENABLE_BACKUP" -eq 1 ]]; then
-        log "Starting backup..."
+        local repo_path=$(get_repo_path)
+        log "Starting backup to repository: $repo_path"
 
         # Build our exclude list
         local exclude_opts="--exclude '**/mount/**' --exclude '**/.cache/restic/**'"
@@ -317,7 +373,7 @@ backup() {
         fi
 
         # Build the backup command
-        local cmd="restic -r \"$LOCAL_BACKUP_REPO/restic\" backup $BACKUP_DIRECTORIES $exclude_opts"
+        local cmd="restic backup $BACKUP_DIRECTORIES $exclude_opts"
 
         if [[ "$VERBOSE" -eq 1 ]]; then
             cmd+=" -v"
@@ -355,7 +411,7 @@ apply_retention_policy() {
         if [[ "$DRY_RUN" -eq 1 ]]; then
             log "DRY-RUN: Would remove snapshots older than $RETENTION_DAYS days"
         else
-            restic -r "$LOCAL_BACKUP_REPO/restic" forget --keep-within "${RETENTION_DAYS}d" --prune
+            restic forget --keep-within "${RETENTION_DAYS}d" --prune
             log_success "Retention policy applied successfully."
         fi
     else
@@ -368,7 +424,7 @@ verify_backup() {
     if [[ "$DRY_RUN" -eq 1 ]]; then
         log "DRY-RUN: Would verify the backup"
     else
-        restic -r "$LOCAL_BACKUP_REPO/restic" check
+        restic check
         if [[ "$?" -eq 0 ]]; then
             log_success "Backup verification completed successfully."
         else
@@ -382,8 +438,9 @@ restore() {
     if [[ "$ENABLE_RESTORE" -eq 1 ]]; then
         local target="${1:-/}"
         local snapshot="${2:-latest}"
+        local repo_path=$(get_repo_path)
 
-        log "Starting restore of snapshot $snapshot to target $target..."
+        log "Starting restore of snapshot $snapshot from $repo_path to target $target..."
 
         # Confirm with the user if not a dry run
         if [[ "$DRY_RUN" -ne 1 ]]; then
@@ -395,7 +452,7 @@ restore() {
             fi
         fi
 
-        local cmd="restic -r \"$LOCAL_BACKUP_REPO/restic\" restore $snapshot --target \"$target\""
+        local cmd="restic restore $snapshot --target \"$target\""
 
         if [[ "$VERBOSE" -eq 1 ]]; then
             cmd+=" -v"
@@ -494,21 +551,22 @@ pull() {
 
 list_snapshots() {
     log "Listing snapshots in repository:"
-    restic -r "$LOCAL_BACKUP_REPO/restic" snapshots
+    restic snapshots
 }
 
 # Show backup stats and summary
 show_stats() {
     log "Generating backup statistics:"
-    restic -r "$LOCAL_BACKUP_REPO/restic" stats
+    restic stats
 
     log "Summary of latest snapshots:"
-    restic -r "$LOCAL_BACKUP_REPO/restic" snapshots --latest 5
+    restic snapshots --latest 5
 }
 
 # Export backup info to a file
 export_info() {
     local export_file="${CONFIG_DIR}/backup-info.txt"
+    local repo_path=$(get_repo_path)
 
     log "Exporting backup information to $export_file"
 
@@ -516,13 +574,13 @@ export_info() {
         echo "===== Backup Information ====="
         echo "Date: $(date)"
         echo "Profile: $PROFILE"
-        echo "Repository: $LOCAL_BACKUP_REPO/restic"
+        echo "Repository: $repo_path"
         echo ""
         echo "===== Snapshots ====="
-        restic -r "$LOCAL_BACKUP_REPO/restic" snapshots
+        restic snapshots
         echo ""
         echo "===== Statistics ====="
-        restic -r "$LOCAL_BACKUP_REPO/restic" stats
+        restic stats
     } > "$export_file"
 
     log_success "Exported backup information to $export_file"
@@ -540,8 +598,16 @@ CONFIG_DIR="/path/to/config/directory"
 # Directories to backup (space-separated)
 BACKUP_DIRECTORIES="/home/user/documents /etc"
 
-# Remote storage configuration
+# Remote repository configuration - two options:
+
+# Option 1: Use a local repo with rclone for remote sync
+LOCAL_BACKUP_REPO="\${CONFIG_DIR}/backups/default"
 RCLONE_REMOTE="remote:backup"
+
+# Option 2: Use a remote repository directly
+# RESTIC_REPOSITORY="s3:s3.amazonaws.com/my-bucket/restic"
+# AWS_ACCESS_KEY_ID="your-access-key"
+# AWS_SECRET_ACCESS_KEY="your-secret-key"
 
 # Backup retention (days)
 RETENTION_DAYS=30
@@ -592,6 +658,7 @@ Environment variables:
   DRY_RUN              Set to 1 for dry-run mode
   VERBOSE              Set to 1 for verbose output
   MAX_LOG_FILES        Maximum number of log files to keep (default: 10)
+  RESTIC_REPOSITORY    Optional: Use a remote repository directly instead of local+rclone
 
 Required configuration in init.sh:
   CONFIG_DIR           Directory for all configuration and backup files
@@ -608,6 +675,9 @@ Examples:
 
   # Run with a specific init script
   INIT_SCRIPT=/path/to/init.sh $SCRIPT_NAME backup
+
+  # Run with a direct remote repository
+  RESTIC_REPOSITORY=s3:s3.amazonaws.com/my-bucket/restic $SCRIPT_NAME backup
 EOF
 }
 
