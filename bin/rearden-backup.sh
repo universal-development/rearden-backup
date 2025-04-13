@@ -342,13 +342,14 @@ get_repo_path() {
 }
 
 # Helper function to build restic command with proper repository flag
+# FIX: Removed the quotes within the command string
 build_restic_command() {
     local base_cmd="restic"
 
     # Add repository flag if using local repository
     if [[ "$USE_REMOTE_REPO" -eq 0 ]]; then
         local repo_path=$(get_repo_path)
-        base_cmd+=" -r \"$repo_path\""
+        base_cmd+=" -r $repo_path"  # Removed the quotes that were causing the issue
     fi
 
     echo "$base_cmd"
