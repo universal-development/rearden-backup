@@ -341,19 +341,39 @@ get_repo_path() {
     fi
 }
 
+# Helper function to build restic command with proper repository flag
+build_restic_command() {
+    local base_cmd="restic"
+
+    # Add repository flag if using local repository
+    if [[ "$USE_REMOTE_REPO" -eq 0 ]]; then
+        local repo_path=$(get_repo_path)
+        base_cmd+=" -r \"$repo_path\""
+    fi
+
+    echo "$base_cmd"
+}
+
 restic_init() {
     local repo_path=$(get_repo_path)
     log "Checking if Restic repository is initialized at $repo_path..."
 
-    if restic snapshots &>/dev/null; then
+    local restic_cmd=$(build_restic_command)
+
+    if $restic_cmd snapshots &>/dev/null; then
         log "Restic repository already initialized."
     else
         log "Initializing Restic repository at $repo_path"
         if [[ "$DRY_RUN" -eq 1 ]]; then
             log "DRY-RUN: Would initialize repository"
         else
-            restic init
-            log_success "Repository initialized successfully."
+            $restic_cmd init
+            if [[ "$?" -eq 0 ]]; then
+                log_success "Repository initialized successfully."
+            else
+                log_error "Repository initialization failed!"
+                return 1
+            fi
         fi
     fi
 }
@@ -372,8 +392,11 @@ backup() {
             log "Using exclude file: ${CONFIG_DIR}/exclude.txt"
         fi
 
-        # Build the backup command
-        local cmd="restic backup $BACKUP_DIRECTORIES $exclude_opts"
+        # Build the base restic command with repo flag
+        local restic_cmd=$(build_restic_command)
+
+        # Build the complete backup command
+        local cmd="$restic_cmd backup $BACKUP_DIRECTORIES $exclude_opts"
 
         if [[ "$VERBOSE" -eq 1 ]]; then
             cmd+=" -v"
@@ -407,12 +430,18 @@ backup() {
 
 apply_retention_policy() {
     if [[ "$RETENTION_DAYS" -gt 0 ]]; then
+        local restic_cmd=$(build_restic_command)
         log "Applying retention policy: keeping backups for $RETENTION_DAYS days"
         if [[ "$DRY_RUN" -eq 1 ]]; then
             log "DRY-RUN: Would remove snapshots older than $RETENTION_DAYS days"
         else
-            restic forget --keep-within "${RETENTION_DAYS}d" --prune
-            log_success "Retention policy applied successfully."
+            $restic_cmd forget --keep-within "${RETENTION_DAYS}d" --prune
+            if [[ "$?" -eq 0 ]]; then
+                log_success "Retention policy applied successfully."
+            else
+                log_error "Failed to apply retention policy!"
+                return 1
+            fi
         fi
     else
         log "Retention policy disabled (RETENTION_DAYS=$RETENTION_DAYS)"
@@ -420,11 +449,12 @@ apply_retention_policy() {
 }
 
 verify_backup() {
+    local restic_cmd=$(build_restic_command)
     log "Verifying backup integrity..."
     if [[ "$DRY_RUN" -eq 1 ]]; then
         log "DRY-RUN: Would verify the backup"
     else
-        restic check
+        $restic_cmd check
         if [[ "$?" -eq 0 ]]; then
             log_success "Backup verification completed successfully."
         else
@@ -439,6 +469,7 @@ restore() {
         local target="${1:-/}"
         local snapshot="${2:-latest}"
         local repo_path=$(get_repo_path)
+        local restic_cmd=$(build_restic_command)
 
         log "Starting restore of snapshot $snapshot from $repo_path to target $target..."
 
@@ -452,7 +483,7 @@ restore() {
             fi
         fi
 
-        local cmd="restic restore $snapshot --target \"$target\""
+        local cmd="$restic_cmd restore $snapshot --target \"$target\""
 
         if [[ "$VERBOSE" -eq 1 ]]; then
             cmd+=" -v"
@@ -550,23 +581,26 @@ pull() {
 }
 
 list_snapshots() {
+    local restic_cmd=$(build_restic_command)
     log "Listing snapshots in repository:"
-    restic snapshots
+    $restic_cmd snapshots
 }
 
 # Show backup stats and summary
 show_stats() {
+    local restic_cmd=$(build_restic_command)
     log "Generating backup statistics:"
-    restic stats
+    $restic_cmd stats
 
     log "Summary of latest snapshots:"
-    restic snapshots --latest 5
+    $restic_cmd snapshots --latest 5
 }
 
 # Export backup info to a file
 export_info() {
     local export_file="${CONFIG_DIR}/backup-info.txt"
     local repo_path=$(get_repo_path)
+    local restic_cmd=$(build_restic_command)
 
     log "Exporting backup information to $export_file"
 
@@ -577,10 +611,10 @@ export_info() {
         echo "Repository: $repo_path"
         echo ""
         echo "===== Snapshots ====="
-        restic snapshots
+        $restic_cmd snapshots
         echo ""
         echo "===== Statistics ====="
-        restic stats
+        $restic_cmd stats
     } > "$export_file"
 
     log_success "Exported backup information to $export_file"
