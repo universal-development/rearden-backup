@@ -81,7 +81,8 @@ ENABLE_BACKUP="1"
 ENABLE_RESTORE="1"
 ENABLE_PUSH="1"
 ENABLE_PULL="1"
-VERBOSE="${VERBOSE:-0}"
+# Verbosity level: 0=none, 1=-v, 2=-vv, 3=-vvv
+VERBOSE="${VERBOSE:-1}"  # Default to level 1 verbosity
 RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-}"
 USE_REMOTE_REPO="0"
 
@@ -201,10 +202,17 @@ check_requirements() {
             local version
             if [[ "$cmd" == "restic" ]]; then
                 version=$(restic version | head -n1)
+                log "Found $version"
+
+                # Check if it's a very old version of restic that might not support some flags
+                if [[ $version =~ restic\ 0\.[0-9](\.[0-9]+)? ]]; then
+                    log_warn "You're using an older version of restic that may not support all features."
+                    log_warn "Consider upgrading to restic 0.12.0 or later for better functionality."
+                fi
             else
                 version=$(rclone --version | head -n1)
+                log "Found $version"
             fi
-            log "Found $version"
         fi
     done
 
@@ -341,8 +349,7 @@ get_repo_path() {
     fi
 }
 
-# Helper function to build restic command with proper repository flag
-# FIX: Removed the quotes within the command string
+# Helper function to build restic command with proper repository flag and verbosity
 build_restic_command() {
     local base_cmd="restic"
 
@@ -351,6 +358,17 @@ build_restic_command() {
         local repo_path=$(get_repo_path)
         base_cmd+=" -r $repo_path"  # Removed the quotes that were causing the issue
     fi
+
+    # Add verbosity flags based on the VERBOSE setting
+    if [[ "$VERBOSE" -eq 1 ]]; then
+        base_cmd+=" -v"
+    elif [[ "$VERBOSE" -eq 2 ]]; then
+        base_cmd+=" -vv"
+    elif [[ "$VERBOSE" -ge 3 ]]; then
+        base_cmd+=" -vvv"
+    fi
+
+    # Note: Removed --progress flag as it's not supported in older restic versions
 
     echo "$base_cmd"
 }
@@ -393,15 +411,12 @@ backup() {
             log "Using exclude file: ${CONFIG_DIR}/exclude.txt"
         fi
 
-        # Build the base restic command with repo flag
+        # Build the base restic command with repo flag and verbosity already included
         local restic_cmd=$(build_restic_command)
 
         # Build the complete backup command
+        # Note: Removed --stats flag as it's not supported in older restic versions
         local cmd="$restic_cmd backup $BACKUP_DIRECTORIES $exclude_opts"
-
-        if [[ "$VERBOSE" -eq 1 ]]; then
-            cmd+=" -v"
-        fi
 
         if [[ "$DRY_RUN" -eq 1 ]]; then
             log "DRY-RUN: Would execute: $cmd"
@@ -591,7 +606,15 @@ list_snapshots() {
 show_stats() {
     local restic_cmd=$(build_restic_command)
     log "Generating backup statistics:"
-    $restic_cmd stats
+
+    # Use `stats` command if available, but be prepared for it to fail in older versions
+    if $restic_cmd stats &>/dev/null; then
+        $restic_cmd stats
+    else
+        # Fallback for older restic versions that don't have the stats command
+        log "The 'stats' command is not available in your restic version."
+        log "Using snapshots command instead to show repository information:"
+    fi
 
     log "Summary of latest snapshots:"
     $restic_cmd snapshots --latest 5
@@ -614,8 +637,14 @@ export_info() {
         echo "===== Snapshots ====="
         $restic_cmd snapshots
         echo ""
+
+        # Only try to run stats if the command is available
         echo "===== Statistics ====="
-        $restic_cmd stats
+        if $restic_cmd stats &>/dev/null; then
+            $restic_cmd stats
+        else
+            echo "Statistics command not available in this restic version."
+        fi
     } > "$export_file"
 
     log_success "Exported backup information to $export_file"
@@ -684,14 +713,16 @@ Commands:
 Options:
   -p, --profile PROFILE   Use specific profile configuration
   -d, --dry-run           Show what would be done without actually doing it
-  -v, --verbose           Increase verbosity
+  -v, --verbose           Enable basic verbosity (level 1)
+  -vv                     Enable more detailed verbosity (level 2)
+  -vvv                    Enable maximum verbosity (level 3)
   -h, --help              Show this help message
 
 Environment variables:
   INIT_SCRIPT          Path to initialization script (default: init.sh)
   PROFILE              Default profile name (default: default)
   DRY_RUN              Set to 1 for dry-run mode
-  VERBOSE              Set to 1 for verbose output
+  VERBOSE              Set verbosity level: 0=none, 1=basic, 2=detailed, 3=maximum (default: 1)
   MAX_LOG_FILES        Maximum number of log files to keep (default: 10)
   RESTIC_REPOSITORY    Optional: Use a remote repository directly instead of local+rclone
 
@@ -729,6 +760,14 @@ parse_args() {
                 ;;
             -v|--verbose)
                 VERBOSE=1
+                shift
+                ;;
+            -vv)
+                VERBOSE=2
+                shift
+                ;;
+            -vvv)
+                VERBOSE=3
                 shift
                 ;;
             -h|--help)
