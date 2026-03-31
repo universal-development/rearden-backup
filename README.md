@@ -193,7 +193,6 @@ Example `local/exclude.txt` for excluding specific patterns:
 # Patterns to exclude from backup
 **/.DS_Store
 **/node_modules
-**/.git
 **/*.log
 **/tmp
 **/temp
