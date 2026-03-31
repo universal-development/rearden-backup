@@ -113,7 +113,6 @@ create_config_structure() {
 # Patterns to exclude from backup
 **/.DS_Store
 **/node_modules
-**/.git
 **/*.log
 **/tmp
 **/temp
