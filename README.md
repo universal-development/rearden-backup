@@ -17,6 +17,7 @@ cloud providers, SFTP, WebDAV, or even custom remote endpoints.
 - 📋 Comprehensive logging system with log rotation
 - 🔃 Profile support for multiple backup configurations
 - 🚫 Lock mechanism to prevent concurrent executions
+- 🔓 Self-healing: auto-removes abandoned repo locks (≥30h old) left by a crashed/killed run
 - 🧪 Dry-run capability to preview actions
 - 🧰 Minimal dependencies: only `bash`, `restic`, and `rclone`
 
@@ -77,6 +78,8 @@ cloud providers, SFTP, WebDAV, or even custom remote endpoints.
 | `VERBOSE`           | Set verbosity level: 0=none, 1=basic, 2=detailed, 3=maximum        | `1`       |
 | `MAX_LOG_FILES`     | Maximum number of log files to keep                                | `10`      |
 | `RESTIC_REPOSITORY` | Optional: Use a remote repository directly instead of local+rclone | ` `       |
+| `AUTO_UNLOCK_STALE` | Auto-remove abandoned repo locks before repo ops (1=on, 0=off)      | `1`       |
+| `STALE_LOCK_HOURS`  | Age threshold (hours) above which a repo lock is auto-removed       | `30`      |
 
 #### Configuration Variables (in init.sh)
 
@@ -94,8 +97,15 @@ cloud providers, SFTP, WebDAV, or even custom remote endpoints.
 | `ENABLE_RESTORE`       | Enable/disable restore functionality                                           | No (default: 1) |
 | `ENABLE_PUSH`          | Enable/disable push functionality                                              | No (default: 1) |
 | `ENABLE_PULL`          | Enable/disable pull functionality                                              | No (default: 1) |
+| `AUTO_UNLOCK_STALE`    | Auto-remove abandoned repo locks before repo operations (1=on, 0=off)          | No (default: 1) |
+| `STALE_LOCK_HOURS`     | Age threshold in hours above which a repo lock is treated as abandoned         | No (default: 30)|
 
 *Either `RESTIC_PASSWORD` or `RESTIC_PASSWORD_FILE` must be set
+
+Abandoned locks are cleared with `restic unlock --remove-all`, and only when the *oldest*
+lock on the repo is at least `STALE_LOCK_HOURS` old — so a legitimately long-running backup's
+lock is never touched. The check runs before `backup`, `restore`, `verify`, `stats`, `list`
+and `export`. Set `AUTO_UNLOCK_STALE=0` to turn it off entirely.
 
 #### Backup Repository Modes
 

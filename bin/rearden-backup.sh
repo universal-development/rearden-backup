@@ -77,6 +77,11 @@ BACKUP_DIRECTORIES=""
 DRY_RUN="${DRY_RUN:-0}"
 RETENTION_DAYS="${RETENTION_DAYS:-0}"
 VERIFY_BACKUP="${VERIFY_BACKUP:-1}"
+# Auto-remove abandoned restic repo locks at least STALE_LOCK_HOURS old before repo operations.
+# Guards against a crashed / killed / rebooted-mid-run backup leaving a lock that blocks every
+# subsequent run. Set AUTO_UNLOCK_STALE=0 to disable.
+AUTO_UNLOCK_STALE="${AUTO_UNLOCK_STALE:-1}"
+STALE_LOCK_HOURS="${STALE_LOCK_HOURS:-30}"
 ENABLE_BACKUP="1"
 ENABLE_RESTORE="1"
 ENABLE_PUSH="1"
@@ -328,6 +333,7 @@ EOF
   DRY_RUN:            $DRY_RUN
   RETENTION_DAYS:     $RETENTION_DAYS
   VERIFY_BACKUP:      $VERIFY_BACKUP
+  AUTO_UNLOCK_STALE:  $AUTO_UNLOCK_STALE (threshold ${STALE_LOCK_HOURS}h)
 
   ENABLE_BACKUP:      $ENABLE_BACKUP
   ENABLE_RESTORE:     $ENABLE_RESTORE
@@ -393,6 +399,62 @@ restic_init() {
                 return 1
             fi
         fi
+    fi
+}
+
+# Auto-remove abandoned restic repo locks older than STALE_LOCK_HOURS.
+# A crashed / killed / rebooted-mid-run restic process can leave a lock in the repo that
+# blocks every subsequent run indefinitely (restic's own stale-lock detection does not
+# always clear these, e.g. after a reboot the original PID is gone). This removes any lock
+# at least STALE_LOCK_HOURS old so scheduled backups self-heal. Disable with AUTO_UNLOCK_STALE=0.
+unlock_stale_locks() {
+    if [[ "${AUTO_UNLOCK_STALE:-1}" -ne 1 ]]; then
+        log "Auto-unlock of stale locks disabled (AUTO_UNLOCK_STALE=0)"
+        return 0
+    fi
+
+    local restic_cmd
+    restic_cmd=$(build_restic_command)
+
+    # List lock IDs currently held on the repository; no locks means nothing to do.
+    local lock_ids
+    lock_ids=$($restic_cmd list locks 2>/dev/null) || return 0
+    [[ -z "$lock_ids" ]] && return 0
+
+    local now_epoch threshold_secs oldest_age=0 found_stale=0
+    now_epoch=$(date +%s)
+    threshold_secs=$((STALE_LOCK_HOURS * 3600))
+
+    local lid lock_time lock_epoch age
+    for lid in $lock_ids; do
+        # `restic cat lock <id>` prints the lock as pretty JSON with an RFC3339 "time" field
+        # ("time": "2026-...Z"), so the extraction must tolerate whitespace around the colon.
+        lock_time=$($restic_cmd cat lock "$lid" 2>/dev/null | grep -oE '"time"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | cut -d'"' -f4 || true)
+        [[ -z "$lock_time" ]] && continue
+        lock_epoch=$(date -d "$lock_time" +%s 2>/dev/null) || continue
+        age=$((now_epoch - lock_epoch))
+        (( age > oldest_age )) && oldest_age=$age
+        if (( age >= threshold_secs )); then
+            found_stale=1
+            log_warn "Restic lock $lid is $((age / 3600))h old (>= ${STALE_LOCK_HOURS}h threshold)"
+        fi
+    done
+
+    if [[ "$found_stale" -eq 0 ]]; then
+        log "No abandoned repo locks older than ${STALE_LOCK_HOURS}h (oldest $((oldest_age / 3600))h)"
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        log_warn "DRY-RUN: would run 'restic unlock --remove-all' to clear abandoned locks"
+        return 0
+    fi
+
+    log_warn "Removing abandoned repo locks (oldest $((oldest_age / 3600))h old) via 'restic unlock --remove-all'"
+    if $restic_cmd unlock --remove-all; then
+        log_success "Abandoned repo locks removed."
+    else
+        log_error "Failed to remove abandoned repo locks (continuing)."
     fi
 }
 
@@ -685,6 +747,11 @@ ENABLE_BACKUP=1
 ENABLE_RESTORE=1
 ENABLE_PUSH=1
 ENABLE_PULL=1
+
+# Auto-remove abandoned restic repo locks older than STALE_LOCK_HOURS before repo ops.
+# Prevents a crashed/killed run from leaving a lock that blocks all future backups.
+AUTO_UNLOCK_STALE=1
+STALE_LOCK_HOURS=30
 EOF
 }
 
@@ -724,6 +791,8 @@ Environment variables:
   VERBOSE              Set verbosity level: 0=none, 1=basic, 2=detailed, 3=maximum (default: 1)
   MAX_LOG_FILES        Maximum number of log files to keep (default: 10)
   RESTIC_REPOSITORY    Optional: Use a remote repository directly instead of local+rclone
+  AUTO_UNLOCK_STALE    Auto-remove abandoned repo locks before repo ops (1=on default, 0=off)
+  STALE_LOCK_HOURS     Age threshold in hours for auto-unlock (default: 30)
 
 Required configuration in init.sh:
   CONFIG_DIR           Directory for all configuration and backup files
@@ -827,6 +896,13 @@ main() {
     validate_config
     set_defaults
     print_config
+
+    # Clear abandoned repo locks (>= STALE_LOCK_HOURS old) before any lock-taking operation.
+    case "$COMMAND" in
+        backup|restore|verify|stats|list|export)
+            unlock_stale_locks
+            ;;
+    esac
 
     # Execute the requested command
     case "$COMMAND" in
